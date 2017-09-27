@@ -1,0 +1,135 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import time
+import socket
+import ssl
+import requests
+import json
+from gi.repository import Gtk
+from gi.repository import Gdk
+from gi.repository import Gio, GLib
+from gi.repository import GObject
+from gi.repository import Pango
+
+from gi.repository.GdkPixbuf import Pixbuf
+from ui import *
+
+import httplib
+
+from httplib import HTTPException
+from threading import Thread
+
+class Interface(Gtk.Window):
+
+    channel = None
+    info_buffer = {}
+    info_tabs = {}
+    last_user = {}
+    tags = {}
+
+    def __init__(self, title):
+
+        # Setup the window
+        Gtk.Window.__init__(self, title=title)
+        icontheme = Gtk.IconTheme.get_default()
+
+        #self.set_icon(icontheme.load_icon("applications-internet", 128, 0))
+        Gdk.set_program_class("vault_monitor")
+        self.set_icon_from_file("./assets/locked.png")
+
+        self.set_default_size(700, 350)
+        self.init_window(title)
+
+    def init_window(self, title):
+
+        # Create basic layout
+        layout = Gtk.Paned()
+        layout.set_position(220)
+
+        self.info = InfoWindow("", "")
+        self.sidebar = Sidebar()
+        self.sidebar.content.connect("row-selected", self.update_channel)
+
+        # Finish layout
+        layout.add1(self.sidebar.view)
+        layout.add2(self.info.view)
+
+        # Connect to window
+        #self.set_titlebar(self.titlebar)
+        self.add(layout)
+        self.cc = 0
+
+    def add_node(self, title):
+        c = Node()
+        c.set_content(title, title, title)
+        c.set_symbol("unlocked32")
+
+        self.info_tabs[title] = c
+        buf = Gtk.TextBuffer()
+        self.info_buffer[title] = buf
+        self.sidebar.add(c)
+        tags = {}
+        tags["bold"] = buf.create_tag(None, weight=Pango.Weight.BOLD)
+        self.tags[title] = tags
+
+    def update_status(self):
+        for tab in self.info_tabs:
+            c = self.info_tabs[tab]
+            if status[tab].get("sealed"):
+                c.set_content(str(tab), str(tab), "Sealed")
+                c.set_symbol("locked32")
+            else:
+                c.set_content(str(tab), str(tab), "Unsealed")
+                c.set_symbol("unlocked32")
+            keys = ["cluster_name", "cluster_id", "t", "n", "progress", "version"]
+            tags = self.tags.get(tab)
+            buf = self.info_buffer.get(tab)
+            buf.set_text("\n\n")
+            for key in keys:
+                buf.insert_with_tags(buf.get_end_iter(),
+                                     "\t{}: ".format(key), tags.get("bold"))
+                buf.insert(buf.get_end_iter(), str(status.get(tab).get(key)) + "\n\n")
+        return True
+
+    def update_channel(self,user, channel):
+        if channel != None:
+            buf = self.info_buffer.get(channel.channel)
+            if buf != None:
+                self.info.set_buffer(buf)
+
+status = {}
+
+def getstatus():
+    global status
+    while True:
+        for server in servers:
+            try:
+                r = requests.get("https://{}:8200/v1/sys/seal-status".format(server), verify=False)
+                status[server] = json.loads(r.content)
+            except:
+                status[server] = {"sealed" : True}
+        time.sleep(1)
+
+
+if __name__ == "__main__":
+
+    servers = ["localhost"]
+
+    for server in servers:
+        status[server] = {}
+        th = Thread(target=getstatus)
+        th.daemon = True
+        th.start()
+
+    # Init window
+    win = Interface("Vault monitor")
+    for server in servers:
+        win.add_node(server)
+
+    win.show_all()
+    GLib.timeout_add(500, win.update_status)
+    win.connect("delete-event", Gtk.main_quit)
+    win.connect("destroy", Gtk.main_quit)
+    Gtk.main()
